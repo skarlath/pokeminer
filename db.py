@@ -106,9 +106,37 @@ class FortCache(object):
             params[2] == sighting['guard_pokemon_id']
         )
         return is_the_same
+        
+class StopCache(object):
+    """Simple cache for storing fort sightings"""
+    def __init__(self):
+        self.store = {}
+
+    @staticmethod
+    def _make_key(stop_sighting):
+        return stop_sighting['external_id']
+
+    def add(self, sighting):
+        self.store[self._make_key(sighting)] = (
+            sighting['lure_expires_timestamp_ms'],
+            sighting['encounter_id'],
+            sighting['active_pokemon_id'],
+        )
+
+    def __contains__(self, sighting):
+        params = self.store.get(self._make_key(sighting))
+        if not params:
+            return False
+        is_the_same = (
+            params[0] == sighting['lure_expires_timestamp_ms'] and
+            params[1] == sighting['encounter_id'] and
+            params[2] == sighting['active_pokemon_id']
+        )
+        return is_the_same
 
 SIGHTING_CACHE = SightingCache()
 FORT_CACHE = FortCache()
+STOP_CACHE = StopCache()
 
 
 class Sighting(Base):
@@ -122,7 +150,36 @@ class Sighting(Base):
     lat = Column(String(16), index=True)
     lon = Column(String(16), index=True)
 
+class Stop(Base):
+    __tablename__ = 'stops'
 
+    id = Column(Integer, primary_key=True)
+    external_id = Column(String(64), unique=True)
+    lat = Column(String(16), index=True)
+    lon = Column(String(16), index=True)
+    sightings = relationship(
+        'StopSighting',
+        backref='stop',
+        order_by='StopSighting.last_modified'
+    )
+
+class StopSighting(Base):
+    __tablename__ = 'stop_sightings'
+
+    id = Column(Integer, primary_key=True)
+    stop_id = Column(Integer, ForeignKey('stops.id'))
+    last_modified = Column(Integer)
+    lure_expires_timestamp_ms = Column(Integer)
+    encounter_id = Column(Integer)
+    active_pokemon_id = Column(Integer)
+    __table_args__ = (
+        UniqueConstraint(
+            'stop_id',
+            'last_modified',
+            name='stop_id_last_modified_unique'
+        ),
+    )
+    
 class Fort(Base):
     __tablename__ = 'forts'
 
@@ -248,6 +305,48 @@ def add_fort_sighting(session, raw_fort):
     else:
         FORT_CACHE.add(raw_fort)
 
+def add_stop_sighting(session, raw_stop):
+    if raw_stop in STOP_CACHE:
+        return
+    # Check if stop exists
+    stop = session.query(Stop) \
+        .filter(Stop.external_id == raw_stop['external_id']) \
+        .filter(Stop.lat == raw_stop['lat']) \
+        .filter(Stop.lon == raw_stop['lon']) \
+        .first()
+    if not stop:
+        stop = Stop(
+            external_id=raw_stop['external_id'],
+            lat=raw_stop['lat'],
+            lon=raw_stop['lon'],
+        )
+        session.add(stop)
+    if stop.id:
+        existing = session.query(StopSighting) \
+            .filter(StopSighting.stop_id == stop.id) \
+            .filter(StopSighting.lure_expires_timestamp_ms == raw_stop['lure_expires_timestamp_ms']) \
+            .filter(StopSighting.encounter_id == raw_stop['encounter_id']) \
+            .filter(StopSighting.active_pokemon_id ==
+                    raw_stop['active_pokemon_id']) \
+            .first()
+        if existing:
+            # Why it's not in cache? It should be there!
+            STOP_CACHE.add(raw_stop)
+            return
+    obj = StopSighting(
+        stop=stop,
+        lure_expires_timestamp_ms=raw_stop['lure_expires_timestamp_ms'],
+        encounter_id=raw_stop['encounter_id'],
+        active_pokemon_id=raw_stop['active_pokemon_id'],
+        last_modified=raw_stop['last_modified'],
+    )
+    session.add(obj)
+    try:
+        session.commit()
+    except IntegrityError:  # skip adding stop this time
+        session.rollback()
+    else:
+        STOP_CACHE.add(raw_stop)
 
 def get_sightings(session):
     return session.query(Sighting) \
@@ -275,6 +374,26 @@ def get_forts(session):
     return query.fetchall()
 
 
+def get_stops(session):
+    query = session.execute('''
+        SELECT * FROM (
+            SELECT
+                ss.stop_id,
+                ss.id,
+                ss.lure_expires_timestamp_ms,
+                ss.encounter_id,
+                ss.active_pokemon_id,
+                ss.last_modified,
+                s.lat,
+                s.lon
+            FROM stop_sightings ss
+            JOIN stops s ON s.id=ss.stop_id
+            ORDER BY ss.last_modified DESC
+        ) t GROUP BY stop_id
+    ''')
+    return query.fetchall() 
+ 
+    
 def get_session_stats(session):
     query = '''
         SELECT
