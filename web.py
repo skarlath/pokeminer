@@ -115,7 +115,7 @@ def get_pokemarkers():
             'lon': fort['lon'],
         })
     for stop in stops:
-        if stop['active_pokemon_id']:
+        if stop['active_pokemon_id'] != 0:
             pokemon_name = pokemon_names[str(stop['active_pokemon_id'])]
         else:
             pokemon_name = 'No Lure'

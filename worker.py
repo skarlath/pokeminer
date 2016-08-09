@@ -7,6 +7,7 @@ import random
 import sys
 import threading
 import time
+import pprint
 
 from pgoapi import (
     exceptions as pgoapi_exceptions,
@@ -188,8 +189,7 @@ class Slave(threading.Thread):
                         if not fort.get('enabled'):
                             continue
                         if fort.get('type') == 1:  # probably pokestops
-                            logger.info('Try to scan a pokestop')
-                            stops.append(self.normalize_stop(fort))
+                            stops.append(self.normalize_stop(fort, fort.get('lure_info', fort)))
                             continue
                         forts.append(self.normalize_fort(fort))
             for raw_pokemon in pokemons:
@@ -232,6 +232,7 @@ class Slave(threading.Thread):
 
     @staticmethod
     def normalize_fort(raw):
+        
         return {
             'external_id': raw['id'],
             'lat': raw['latitude'],
@@ -243,14 +244,14 @@ class Slave(threading.Thread):
         }
 	
     @staticmethod
-    def normalize_stop(raw):
+    def normalize_stop(raw, lure):
         return {
             'external_id': raw['id'],
             'lat': raw['latitude'],
             'lon': raw['longitude'],
-            'lure_expires_timestamp_ms': raw.get('lure_expires_timestamp_ms', 0) / 1000,
-            'encounter_id': raw.get('encounter_id', 0),
-            'active_pokemon_id': raw.get('active_pokemon_id', 0),
+            'lure_expires_timestamp_ms': lure.get('lure_expires_timestamp_ms', 0) / 1000,
+            'encounter_id': lure.get('encounter_id', 0),
+            'active_pokemon_id': lure.get('active_pokemon_id', 0),
             'last_modified': raw['last_modified_timestamp_ms'] / 1000.0,
         }
 	

@@ -4,7 +4,7 @@ import json
 import time
 
 from sqlalchemy import create_engine
-from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, func, DateTime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
@@ -170,8 +170,9 @@ class StopSighting(Base):
     stop_id = Column(Integer, ForeignKey('stops.id'))
     last_modified = Column(Integer)
     lure_expires_timestamp_ms = Column(Integer)
-    encounter_id = Column(Integer)
+    encounter_id = Column(String(32))
     active_pokemon_id = Column(Integer)
+    sighting_time = Column(DateTime, server_default=func.now())
     __table_args__ = (
         UniqueConstraint(
             'stop_id',
@@ -309,6 +310,7 @@ def add_stop_sighting(session, raw_stop):
     if raw_stop in STOP_CACHE:
         return
     # Check if stop exists
+    #logger.info('Logging the stop sighting: ' + raw_stop['lure_expires_timestamp_ms'] + ' - ' + raw_stop['encounter_id'] + ' - ' + raw_stop['active_pokemon_id'])
     stop = session.query(Stop) \
         .filter(Stop.external_id == raw_stop['external_id']) \
         .filter(Stop.lat == raw_stop['lat']) \
@@ -325,7 +327,7 @@ def add_stop_sighting(session, raw_stop):
         existing = session.query(StopSighting) \
             .filter(StopSighting.stop_id == stop.id) \
             .filter(StopSighting.lure_expires_timestamp_ms == raw_stop['lure_expires_timestamp_ms']) \
-            .filter(StopSighting.encounter_id == raw_stop['encounter_id']) \
+            .filter(StopSighting.encounter_id == str(raw_stop['encounter_id'])) \
             .filter(StopSighting.active_pokemon_id ==
                     raw_stop['active_pokemon_id']) \
             .first()
@@ -336,7 +338,7 @@ def add_stop_sighting(session, raw_stop):
     obj = StopSighting(
         stop=stop,
         lure_expires_timestamp_ms=raw_stop['lure_expires_timestamp_ms'],
-        encounter_id=raw_stop['encounter_id'],
+        encounter_id=str(raw_stop['encounter_id']),
         active_pokemon_id=raw_stop['active_pokemon_id'],
         last_modified=raw_stop['last_modified'],
     )
@@ -356,28 +358,26 @@ def get_sightings(session):
 
 def get_forts(session):
     query = session.execute('''
-        SELECT * FROM (
-            SELECT
-                fs.fort_id,
-                fs.id,
-                fs.team,
-                fs.prestige,
-                fs.guard_pokemon_id,
-                fs.last_modified,
-                f.lat,
-                f.lon
-            FROM fort_sightings fs
-            JOIN forts f ON f.id=fs.fort_id
-            ORDER BY fs.last_modified DESC
-        ) t GROUP BY fort_id
+        
+    SELECT
+        fs.fort_id,
+        fs.id,
+        fs.team,
+        fs.prestige,
+        fs.guard_pokemon_id,
+        fs.last_modified,
+        f.lat,
+        f.lon
+    FROM fort_sightings fs
+	inner join (select max(fs.last_modified) as last_modified, fs.fort_id FROM fort_sightings fs group by fort_id) lfs on lfs.fort_id = fs.fort_id and lfs.last_modified = fs.last_modified
+    inner JOIN forts f ON f.id=fs.fort_id
     ''')
     return query.fetchall()
 
 
 def get_stops(session):
     query = session.execute('''
-        SELECT * FROM (
-            SELECT
+                    SELECT
                 ss.stop_id,
                 ss.id,
                 ss.lure_expires_timestamp_ms,
@@ -387,9 +387,10 @@ def get_stops(session):
                 s.lat,
                 s.lon
             FROM stop_sightings ss
+			inner join (SELECT max(id) as maxid, stop_id, max(lure_expires_timestamp_ms) as ltime, max(sighting_time) stime from stop_sightings
+group by stop_id) mss on ss.id = mss.maxid
             JOIN stops s ON s.id=ss.stop_id
             ORDER BY ss.last_modified DESC
-        ) t GROUP BY stop_id
     ''')
     return query.fetchall() 
  
