@@ -313,8 +313,6 @@ def add_stop_sighting(session, raw_stop):
     #logger.info('Logging the stop sighting: ' + raw_stop['lure_expires_timestamp_ms'] + ' - ' + raw_stop['encounter_id'] + ' - ' + raw_stop['active_pokemon_id'])
     stop = session.query(Stop) \
         .filter(Stop.external_id == raw_stop['external_id']) \
-        .filter(Stop.lat == raw_stop['lat']) \
-        .filter(Stop.lon == raw_stop['lon']) \
         .first()
     if not stop:
         stop = Stop(
