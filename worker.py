@@ -7,6 +7,7 @@ import random
 import sys
 import threading
 import time
+import pprint
 
 from pgoapi import (
     exceptions as pgoapi_exceptions,
@@ -167,9 +168,10 @@ class Slave(threading.Thread):
             )
             if response_dict is False:
                 raise CannotProcessStep
-            now = time.time()
             map_objects = response_dict['responses'].get('GET_MAP_OBJECTS', {})
             pokemons = []
+            forts = []
+            stops = []
             if map_objects.get('status') == 1:
                 for map_cell in map_objects['map_cells']:
                     for pokemon in map_cell.get('wild_pokemons', []):
@@ -178,13 +180,33 @@ class Slave(threading.Thread):
                         # time_till_hidden is below 15 min
                         if pokemon['time_till_hidden_ms'] < 0:
                             continue
-                        pokemons.append(self.normalize_pokemon(pokemon, now))
+                        pokemons.append(
+                            self.normalize_pokemon(
+                                pokemon, map_cell['current_timestamp_ms']
+                            )
+                        )
+                    for fort in map_cell.get('forts', []):
+                        if not fort.get('enabled'):
+                            continue
+                        if fort.get('type') == 1:  # probably pokestops
+                            stops.append(self.normalize_stop(fort, fort.get('lure_info', fort)))
+                            continue
+                        forts.append(self.normalize_fort(fort))
             for raw_pokemon in pokemons:
                 db.add_sighting(session, raw_pokemon)
                 self.seen_per_cycle += 1
                 self.total_seen += 1
-            logger.info('Point processed, %d Pokemons seen!', len(pokemons))
             session.commit()
+            for raw_fort in forts:
+                db.add_fort_sighting(session, raw_fort)
+            for raw_stop in stops:
+                db.add_stop_sighting(session, raw_stop)
+            # Commit is not necessary here, it's done by add_fort_sighting
+            logger.info(
+                'Point processed, %d Pokemons and %d forts seen!',
+                len(pokemons),
+                len(forts),
+            )
             # Clear error code and let know that there are Pokemon
             if self.error_code and self.seen_per_cycle:
                 self.error_code = None
@@ -203,11 +225,36 @@ class Slave(threading.Thread):
             'encounter_id': raw['encounter_id'],
             'spawn_id': raw['spawn_point_id'],
             'pokemon_id': raw['pokemon_data']['pokemon_id'],
-            'expire_timestamp': now + raw['time_till_hidden_ms'] / 1000.0,
+            'expire_timestamp': (now + raw['time_till_hidden_ms']) / 1000.0,
             'lat': raw['latitude'],
             'lon': raw['longitude'],
         }
 
+    @staticmethod
+    def normalize_fort(raw):
+        
+        return {
+            'external_id': raw['id'],
+            'lat': raw['latitude'],
+            'lon': raw['longitude'],
+            'team': raw.get('owned_by_team', 0),
+            'prestige': raw.get('gym_points', 0),
+            'guard_pokemon_id': raw.get('guard_pokemon_id', 0),
+            'last_modified': raw['last_modified_timestamp_ms'] / 1000.0,
+        }
+	
+    @staticmethod
+    def normalize_stop(raw, lure):
+        return {
+            'external_id': raw['id'],
+            'lat': raw['latitude'],
+            'lon': raw['longitude'],
+            'lure_expires_timestamp_ms': lure.get('lure_expires_timestamp_ms', 0) / 1000,
+            'encounter_id': lure.get('encounter_id', 0),
+            'active_pokemon_id': lure.get('active_pokemon_id', 0),
+            'last_modified': raw['last_modified_timestamp_ms'] / 1000.0,
+        }
+	
     @property
     def status(self):
         """Returns status message to be displayed in status screen"""
@@ -295,7 +342,7 @@ def spawn_workers(workers, status_bar=True):
         now = time.time()
         # Clean cache
         if now - last_cleaned_cache > (15 * 60):  # clean cache
-            db.CACHE.clean_expired()
+            db.SIGHTING_CACHE.clean_expired()
             last_cleaned_cache = now
         # Check up on workers
         if now - last_workers_checked > (5 * 60):
