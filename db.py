@@ -386,6 +386,7 @@ def get_stops(session):
                 s.lon
             FROM stop_sightings ss
 			inner join (SELECT max(id) as maxid, stop_id, max(lure_expires_timestamp_ms) as ltime, max(sighting_time) stime from stop_sightings
+			where dateadd(mi, datediff(mi, getutcdate(), getDate()), dateadd(S, lure_expires_timestamp_ms, '1970-01-01')) > getdate() or lure_expires_timestamp_ms = 0
 group by stop_id) mss on ss.id = mss.maxid
             JOIN stops s ON s.id=ss.stop_id
             ORDER BY ss.last_modified DESC
@@ -399,7 +400,7 @@ def get_session_stats(session):
             MIN(expire_timestamp) ts_min,
             MAX(expire_timestamp) ts_max,
             COUNT(*)
-        FROM `sightings`
+        FROM sightings
         {report_since}
     '''
     min_max_query = session.execute(query.format(
@@ -426,11 +427,11 @@ def get_punch_card(session):
         bigint = 'UNSIGNED'
     query = session.execute('''
         SELECT
-            CAST((expire_timestamp / 300) AS {bigint}) ts_date,
+            CAST((expire_timestamp / 300) AS bigint) as ts_date,
             COUNT(*) how_many
-        FROM `sightings`
+        FROM sightings
         {report_since}
-        GROUP BY ts_date
+        GROUP BY CAST((expire_timestamp / 300) AS bigint)
         ORDER BY ts_date
     '''.format(bigint=bigint, report_since=get_since_query_part()))
     results = query.fetchall()
@@ -444,14 +445,13 @@ def get_punch_card(session):
 
 def get_top_pokemon(session, count=30, order='DESC'):
     query = session.execute('''
-        SELECT
+        SELECT top {count}
             pokemon_id,
             COUNT(*) how_many
         FROM sightings
         {report_since}
         GROUP BY pokemon_id
         ORDER BY how_many {order}
-        LIMIT {count}
     '''.format(order=order, count=count, report_since=get_since_query_part()))
     return query.fetchall()
 
@@ -497,7 +497,7 @@ def get_spawns_per_hour(session, pokemon_id):
     if get_engine_name(session) == 'sqlite':
         ts_hour = 'STRFTIME("%H", expire_timestamp)'
     else:
-        ts_hour = 'HOUR(FROM_UNIXTIME(expire_timestamp))'
+        ts_hour = "datepart(hour,dateadd(mi, -14,dateadd(mi, datediff(mi, getutcdate(), getDate()), dateadd(S, expire_timestamp, '1970-01-01'))))"
     query = session.execute('''
         SELECT
             {ts_hour} AS ts_hour,
@@ -505,7 +505,7 @@ def get_spawns_per_hour(session, pokemon_id):
         FROM sightings
         WHERE pokemon_id = {pokemon_id}
         {report_since}
-        GROUP BY ts_hour
+        GROUP BY {ts_hour}
         ORDER BY ts_hour
     '''.format(
         pokemon_id=pokemon_id,
